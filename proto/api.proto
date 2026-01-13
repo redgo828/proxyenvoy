@@ -1,0 +1,47 @@
+syntax = "proto3";
+
+package backend;
+option go_package = "backend/proto";
+
+import "google/api/annotations.proto";
+
+service AuthService {
+  rpc Login(LoginRequest) returns (AuthResponse) {
+    option (google.api.http) = {
+      post: "/auth/login"
+      body: "*"
+    };
+  }
+
+  rpc Refresh(RefreshRequest) returns (AuthResponse) {
+    option (google.api.http) = {
+      post: "/auth/refresh"
+      body: "*"
+    };
+  }
+}
+
+service HealthService {
+  rpc Check(Empty) returns (HealthReply) {
+    option (google.api.http) = {
+      get: "/health"
+    };
+  }
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+message RefreshRequest {}
+
+message AuthResponse {
+  string access_token = 1;
+}
+
+message Empty {}
+
+message HealthReply {
+  string status = 1;
+}

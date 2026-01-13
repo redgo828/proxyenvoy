@@ -1,0 +1,153 @@
+static_resources:
+  listeners:
+    - name: listener_http
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 8080
+
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: ingress_http
+                codec_type: AUTO
+
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+
+                      routes:
+                        # ---------- AUTH ----------
+                        - match:
+                            prefix: "/auth"
+                          route:
+                            cluster: backend
+                          typed_per_filter_config:
+                            envoy.filters.http.cors:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.CorsPolicy
+                              allow_origin_string_match:
+                                - exact: "http://localhost"
+                              allow_methods: "POST,OPTIONS"
+                              allow_headers: "content-type,authorization"
+                              allow_credentials: true
+
+                        # ---------- HEALTH ----------
+                        - match:
+                            prefix: "/health"
+                          route:
+                            cluster: backend
+                          typed_per_filter_config:
+                            envoy.filters.http.cors:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.CorsPolicy
+                              allow_origin_string_match:
+                                - safe_regex:
+                                    regex: ".*"
+                              allow_methods: "GET,OPTIONS"
+
+                        # ---------- all ----------
+                        - match:
+                            prefix: "/"
+                          route:
+                            cluster: backend
+
+                http_filters:
+
+                  # --- CORS ---
+                  - name: envoy.filters.http.cors
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+
+                  # --- JWT AUTH ---
+                  - name: envoy.filters.http.jwt_authn
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                      providers:
+                        backend_jwt:
+                          issuer: "grpc-backend"
+                          audiences: ["frontend"]
+                          local_jwks:
+                            filename: /etc/envoy/jwks.json
+                          
+                          # --- HOW USE REMOTE JWKS ---
+                          # remote_jwks:
+                          #   http_uri:
+                          #     uri: "https://baseURL_WHERE_JWKS/.well-known/jwks.json"
+                          #     cluster: jwks_cluster
+                          #     timeout: 5s
+                          #   cache_duration: 10m
+
+                          from_headers:
+                            - name: Authorization
+                              value_prefix: "Bearer "
+                      rules:
+                        - match:
+                            prefix: "/auth/refresh"
+                          requires:
+                            provider_name: backend_jwt #check and validate jwt
+                        - match:
+                            prefix: "/auth"
+                          requires:
+                            allow_missing: {}
+                        - match:
+                            prefix: "/health"
+                          requires:
+                            allow_missing: {}
+                        - match:
+                            prefix: "/"
+                          requires:
+                            provider_name: backend_jwt #check and validate jwt
+
+                  # --- REST → gRPC ---
+                  - name: envoy.filters.http.grpc_json_transcoder
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_json_transcoder.v3.GrpcJsonTranscoder
+                      proto_descriptor: "/etc/envoy/proto.pb"
+                      services:
+                        - backend.AuthService
+                        - backend.HealthService
+                      print_options:
+                        preserve_proto_field_names: true
+
+                  # --- ROUTER ---
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: backend
+      connect_timeout: 5s
+      type: logical_dns
+      http2_protocol_options: {}
+      load_assignment:
+        cluster_name: backend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: backend
+                      port_value: 50051
+    # - name: jwks_cluster
+    #   type: logical_dns
+    #   connect_timeout: 5s
+    #   dns_lookup_family: V4_ONLY
+
+    #   load_assignment:
+    #     cluster_name: jwks_cluster
+    #     endpoints:
+    #       - lb_endpoints:
+    #           - endpoint:
+    #               address:
+    #                 socket_address:
+    #                   address: baseURL_WHERE_JWKS
+    #                   port_value: 443
+
+    #   transport_socket:
+    #     name: envoy.transport_sockets.tls
+    #     typed_config:
+    #       "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+
